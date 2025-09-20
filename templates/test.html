@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <title>Face Recognition Test</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    video, img { max-width: 300px; border: 1px solid #ccc; margin-top: 10px; }
+    .section { margin-bottom: 30px; }
+  </style>
+</head>
+<body>
+  <h1>Face Recognition Test</h1>
+
+  <!-- Register -->
+  <div class="section">
+    <h2>Đăng ký khuôn mặt</h2>
+    <input type="text" id="name" placeholder="Nhập tên">
+    <br><br>
+    <input type="file" id="registerFile">
+    <br><br>
+    <video id="registerVideo" autoplay></video>
+    <br>
+    <button onclick="captureRegister()">📸 Chụp</button>
+    <canvas id="registerCanvas" hidden></canvas>
+    <br><br>
+    <button onclick="submitRegister()">Đăng ký</button>
+    <p id="registerResult"></p>
+  </div>
+
+  <!-- Recognition -->
+  <div class="section">
+    <h2>Nhận diện</h2>
+    <input type="file" id="recognitionFile">
+    <br><br>
+    <video id="recognitionVideo" autoplay></video>
+    <br>
+    <button onclick="captureRecognition()">📸 Chụp</button>
+    <canvas id="recognitionCanvas" hidden></canvas>
+    <br><br>
+    <button onclick="submitRecognition()">Nhận diện</button>
+    <p id="recognitionResult"></p>
+  </div>
+
+<script>
+const API_BASE = "http://localhost:5000";  // đổi IP khi chạy LAN/Deploy
+
+// Lấy camera
+async function initCamera(videoId) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    document.getElementById(videoId).srcObject = stream;
+  } catch (err) {
+    alert("Không mở được camera: " + err);
+  }
+}
+
+initCamera("registerVideo");
+initCamera("recognitionVideo");
+
+// Chụp ảnh từ video
+function capture(videoId, canvasId) {
+  const video = document.getElementById(videoId);
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext("2d");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg"));
+}
+
+async function captureRegister() {
+  const blob = await capture("registerVideo", "registerCanvas");
+  document.getElementById("registerCanvas").hidden = false;
+  document.getElementById("registerCanvas").src = URL.createObjectURL(blob);
+  document.getElementById("registerCanvas").dataset.blob = blob;
+}
+
+async function captureRecognition() {
+  const blob = await capture("recognitionVideo", "recognitionCanvas");
+  document.getElementById("recognitionCanvas").hidden = false;
+  document.getElementById("recognitionCanvas").src = URL.createObjectURL(blob);
+  document.getElementById("recognitionCanvas").dataset.blob = blob;
+}
+
+// Gửi đăng ký
+async function submitRegister() {
+  const name = document.getElementById("name").value;
+  if (!name) return alert("Nhập tên trước!");
+
+  const formData = new FormData();
+  formData.append("name", name);
+
+  const fileInput = document.getElementById("registerFile").files[0];
+  if (fileInput) {
+    formData.append("file", fileInput);
+  } else if (document.getElementById("registerCanvas").dataset.blob) {
+    formData.append("file", document.getElementById("registerCanvas").dataset.blob, "capture.jpg");
+  } else {
+    return alert("Chọn hoặc chụp ảnh!");
+  }
+
+  const res = await fetch(API_BASE + "/face-register", {
+    method: "POST",
+    body: formData
+  });
+  const data = await res.json();
+  document.getElementById("registerResult").innerText = JSON.stringify(data);
+}
+
+// Gửi nhận diện
+async function submitRecognition() {
+  const formData = new FormData();
+
+  const fileInput = document.getElementById("recognitionFile").files[0];
+  if (fileInput) {
+    formData.append("file", fileInput);
+  } else if (document.getElementById("recognitionCanvas").dataset.blob) {
+    formData.append("file", document.getElementById("recognitionCanvas").dataset.blob, "capture.jpg");
+  } else {
+    return alert("Chọn hoặc chụp ảnh!");
+  }
+
+  const res = await fetch(API_BASE + "/face-recognition", {
+    method: "POST",
+    body: formData
+  });
+  const data = await res.json();
+  document.getElementById("recognitionResult").innerText = data.name + " (distance: " + data.distance + ")";
+}
+</script>
+</body>
+</html>

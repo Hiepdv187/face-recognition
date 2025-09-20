@@ -1,0 +1,9 @@
+tf_keras==2.20.1 
+fastapi==0.116.2
+uvicorn==0.36.0
+deepface==0.0.95
+faiss-cpu==1.12.0
+opencv-python==4.12.0.88
+numpy==2.2.6
+sqlalchemy==2.0.43
+python-multipart==0.0.20

@@ -24,6 +24,28 @@ Base.metadata.create_all(bind=engine)
 def index():
     return render_template("test.html")
 
+@app.route("/health")
+def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        session = SessionLocal()
+        session.execute("SELECT 1")
+        session.close()
+
+        return jsonify({
+            "status": "healthy",
+            "service": "face-recognition",
+            "database": "connected",
+            "version": "1.0.0"
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "service": "face-recognition",
+            "error": str(e)
+        }), 500
+
 @app.route("/face-register", methods=["POST"])
 def register():
     name = request.form.get("name")

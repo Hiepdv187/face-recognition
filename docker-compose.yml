@@ -1,21 +1,69 @@
 version: "3.8"
 
 services:
-  web:
+  face-recognition:
     build: .
-    container_name: face_api
+    container_name: face_recognition_api
     restart: always
+    ports:
+      - "5000:5000"
     volumes:
       - ./dataset:/app/dataset
       - ./embeddings:/app/embeddings
-    expose:
-      - "5000"
+    networks:
+      - app-network
+    environment:
+      - DATABASE_URL=postgresql://your_user:your_password@postgres:5432/your_db
+
+  golang-service:
+    build:
+      context: ../golang-project  # Adjust this path to your Golang project
+      dockerfile: Dockerfile
+    container_name: golang_api
+    restart: always
+    ports:
+      - "8080:8080"  # Adjust port as needed for your Golang app
+    environment:
+      - DATABASE_URL=postgresql://your_user:your_password@postgres:5432/your_db
+      - FACE_API_URL=http://face-recognition:5000
+    networks:
+      - app-network
+    depends_on:
+      - postgres
+      - face-recognition
+
+  postgres:
+    image: postgres:15
+    container_name: shared_postgres
+    restart: always
+    environment:
+      - POSTGRES_DB=your_db
+      - POSTGRES_USER=your_user
+      - POSTGRES_PASSWORD=your_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    ports:
+      - "5432:5432"
 
   nginx:
     image: nginx:latest
-    container_name: face_nginx
+    container_name: combined_nginx
     restart: always
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/combined.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - face-recognition
+      - golang-service
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

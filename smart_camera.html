@@ -329,6 +329,8 @@
                     <button id="startBtn" onclick="startCamera()">🎥 Start Camera</button>
                     <button id="stopBtn" onclick="stopCamera()" disabled>⏹️ Stop Camera</button>
                     <button id="registerBtn" onclick="registerCurrentFace()" disabled>👤 Register Face</button>
+                    <button id="debugBtn" onclick="debugSystem()">🔧 Debug</button>
+                    <button id="testBtn" onclick="testCapture()">🧪 Test</button>
                 </div>
 
                 <div id="status" class="status">⏹️ Camera stopped</div>
@@ -393,12 +395,18 @@
         // Initialize camera
         async function startCamera() {
             try {
+                console.log('📹 Starting camera...');
+
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         width: { ideal: 1280 },
                         height: { ideal: 720 }
                     }
                 });
+
+                console.log('✅ Camera access granted');
+                console.log('🎥 Stream tracks:', stream.getTracks().length);
+                console.log('📹 Video track settings:', stream.getVideoTracks()[0].getSettings());
 
                 video.srcObject = stream;
 
@@ -407,20 +415,29 @@
                     overlayCanvas.width = video.videoWidth;
                     overlayCanvas.height = video.videoHeight;
                     drawOverlay();
+                    console.log('📊 Video metadata loaded');
+                    console.log('🎨 Video dimensions:', video.videoWidth, 'x', video.videoHeight);
                 };
 
                 document.getElementById('startBtn').disabled = true;
                 document.getElementById('stopBtn').disabled = false;
                 document.getElementById('registerBtn').disabled = false;
+                document.getElementById('debugBtn').disabled = false;
+                document.getElementById('testBtn').disabled = false;
 
                 addLog('Camera started successfully', 'success');
                 updateStatus('Camera active - Starting recognition...', 'recognizing');
+                console.log('🎥 Video element configured');
 
                 // Start automatic recognition
                 startAutoRecognition();
 
             } catch (error) {
+                console.error('❌ Camera error:', error);
+                console.error('❌ Error name:', error.name);
+                console.error('❌ Error message:', error.message);
                 addLog('Error accessing camera: ' + error.message, 'error');
+                addLog('Error details: ' + error.name, 'error');
                 updateStatus('Camera access failed', 'error');
             }
         }
@@ -437,6 +454,8 @@
             document.getElementById('startBtn').disabled = false;
             document.getElementById('stopBtn').disabled = true;
             document.getElementById('registerBtn').disabled = true;
+            document.getElementById('debugBtn').disabled = true;
+            document.getElementById('testBtn').disabled = true;
 
             stopAutoRecognition();
             updateStatus('Camera stopped', '');
@@ -507,16 +526,21 @@
 
         // Automatic face recognition
         function startAutoRecognition() {
-            if (isRecognizing) return;
+            if (isRecognizing) {
+                console.log('⚠️ Recognition already running');
+                return;
+            }
 
             isRecognizing = true;
             document.getElementById('startBtn').classList.add('recording');
 
             recognitionInterval = setInterval(() => {
+                console.log('🔄 Recognition cycle triggered');
                 recognizeFrame();
             }, 1500); // Recognize every 1.5 seconds
 
             addLog('Auto recognition started', 'success');
+            console.log('✅ Auto recognition started');
         }
 
         function stopAutoRecognition() {
@@ -531,7 +555,12 @@
 
         // Capture frame and send for recognition
         async function recognizeFrame() {
-            if (!stream) return;
+            if (!stream) {
+                console.log('⚠️ No stream available');
+                return;
+            }
+
+            console.log('📸 Starting frame capture...');
 
             const canvas = document.createElement('canvas');
             canvas.width = video.videoWidth;
@@ -539,23 +568,53 @@
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video, 0, 0);
 
+            console.log(`🎨 Canvas size: ${canvas.width}x${canvas.height}`);
+
+            // Convert canvas to blob
             canvas.toBlob(async (blob) => {
+                if (!blob) {
+                    console.error('❌ Failed to create blob from canvas');
+                    addLog('Failed to capture image', 'error');
+                    return;
+                }
+
+                console.log('📊 Blob created, size:', blob.size, 'bytes');
+
+                if (blob.size < 1000) {
+                    console.warn('⚠️ Blob size too small, might be empty image');
+                    addLog('Image capture too small', 'warning');
+                }
+
                 const formData = new FormData();
                 formData.append('image', blob, 'frame.jpg');
 
                 try {
+                    console.log('🎥 Sending frame for recognition...');
+
                     const response = await fetch('/api/face/recognize', {
                         method: 'POST',
                         body: formData
                     });
 
+                    console.log('📡 Response status:', response.status);
+                    console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+
                     const result = await response.json();
+                    console.log('📄 Response JSON:', result);
+
+                    if (result.status === 'success') {
+                        console.log('✅ Recognition successful');
+                    } else {
+                        console.error('❌ Recognition failed:', result);
+                    }
+
                     displayRecognitionResult(result);
 
                     // Update overlay with recognition result
                     drawOverlayWithResult(result);
 
                 } catch (error) {
+                    console.error('❌ Network/Parse error:', error);
                     addLog('Recognition failed: ' + error.message, 'error');
                     drawOverlayWithResult({ name: 'Unknown', distance: 1.0 });
                 }
@@ -749,22 +808,63 @@
             }
         }
 
-        // Display registered faces
-        function displayRegisteredFaces(persons) {
-            const faceGrid = document.getElementById('faceGrid');
+        // Debug system
+        async function debugSystem() {
+            try {
+                addLog('🔧 Starting system debug...', 'info');
+                console.log('🔧 Starting system debug...');
 
-            if (persons.length === 0) {
-                faceGrid.innerHTML = '<p style="text-align: center; color: #666; grid-column: 1 / -1;">No registered faces</p>';
+                const response = await fetch('/api/face/debug');
+                const result = await response.json();
+
+                console.log('📋 Debug result:', result);
+
+                if (result.status === 'debug') {
+                    addLog(`✅ System Status: ${result.faiss_index}, ${result.labels}`, 'success');
+                    addLog(`👥 Registered persons: ${result.registered_persons}`, 'info');
+                    addLog(`📁 Dataset files: ${result.dataset_files}`, 'info');
+
+                    if (result.persons && result.persons.length > 0) {
+                        addLog('📝 Registered faces:', 'info');
+                        result.persons.forEach(person => {
+                            addLog(`  - ID ${person.id}: ${person.name}`, 'info');
+                        });
+                    }
+
+                    alert(`✅ Debug completed!\n\nSystem: ${result.faiss_index}/${result.labels}\nPersons: ${result.registered_persons}\nDataset: ${result.dataset_files} files\n\nCheck console for details.`);
+                } else {
+                    addLog('❌ Debug failed: ' + result.message, 'error');
+                    alert('❌ Debug failed: ' + result.message);
+                }
+
+            } catch (error) {
+                console.error('❌ Debug error:', error);
+                addLog('Debug error: ' + error.message, 'error');
+                alert('❌ Debug error: ' + error.message);
+            }
+        }
+
+        // Test capture function
+        async function testCapture() {
+            if (!stream) {
+                alert('❌ Please start camera first!');
                 return;
             }
 
-            faceGrid.innerHTML = persons.map(person => `
-                <div class="face-item">
-                    <div class="face-avatar-small">${person.name.charAt(0).toUpperCase()}</div>
-                    <div style="font-size: 14px; color: #1e3c72; font-weight: bold;">${person.name}</div>
-                    <div style="font-size: 12px; color: #666;">ID: ${person.id}</div>
-                </div>
-            `).join('');
+            addLog('🧪 Testing manual capture...', 'info');
+            console.log('🧪 Manual test capture initiated');
+
+            // Disable auto recognition temporarily
+            const wasRecognizing = isRecognizing;
+            if (isRecognizing) {
+                stopAutoRecognition();
+                setTimeout(() => {
+                    if (wasRecognizing) startAutoRecognition();
+                }, 5000); // Restart after 5 seconds
+            }
+
+            // Manual capture
+            await recognizeFrame();
         }
 
         // Animation loop for overlay
@@ -777,6 +877,7 @@
 
         // Initialize
         window.addEventListener('load', () => {
+            console.log('📹 Smart Camera System initializing...');
             addLog('📹 Smart Camera System initialized', 'info');
             loadRegisteredFaces();
             animate(); // Start animation loop

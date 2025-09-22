@@ -56,6 +56,11 @@ def home():
     </html>
     '''
 
+@app.route('/realtime')
+def realtime():
+    """Real-time face recognition interface"""
+    return send_from_directory('.', 'realtime_face_recognition.html')
+
 @app.route('/smart-camera')
 def smart_camera():
     """Smart camera interface with overlay"""
@@ -216,30 +221,43 @@ def register_face():
 def recognize_face_api():
     """Recognize face from uploaded image"""
     try:
+        print("🔍 Received recognition request")
+
         if 'image' not in request.files:
+            print("❌ No image in request.files")
             return jsonify({"status": "error", "message": "No image provided"})
 
         file = request.files['image']
 
         if file.filename == '':
+            print("❌ Empty filename")
             return jsonify({"status": "error", "message": "No image selected"})
+
+        print(f"📁 Processing image: {file.filename}")
 
         # Read image
         img_bytes = file.read()
+        print(f"📊 Image size: {len(img_bytes)} bytes")
+
         img = Image.open(io.BytesIO(img_bytes))
 
         # Save to temporary file
         filename = f"temp_{uuid.uuid4().hex}.jpg"
         filepath = os.path.join(UPLOAD_FOLDER, filename)
         img.save(filepath)
+        print(f"💾 Saved to: {filepath}")
 
         # Recognize face
+        print("🤖 Starting face recognition...")
         name, distance = recognize_face(filepath)
+        print(f"✅ Recognition result: name={name}, distance={distance}")
 
         # Clean up temp file
         try:
             os.remove(filepath)
+            print(f"🗑️ Cleaned up: {filepath}")
         except:
+            print(f"⚠️ Failed to clean up: {filepath}")
             pass
 
         return jsonify({
@@ -249,6 +267,9 @@ def recognize_face_api():
         })
 
     except Exception as e:
+        print(f"❌ Recognition error: {str(e)}")
+        import traceback
+        print("📋 Traceback:", traceback.format_exc())
         return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/api/face/persons', methods=['GET'])
@@ -271,14 +292,37 @@ def get_persons():
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
-@app.route('/api/face/realtime/status', methods=['GET'])
-def realtime_status():
-    """Get real-time recognition status"""
-    return jsonify({
-        "status": "active",
-        "message": "Real-time recognition is running",
-        "cache": recognition_cache
-    })
+@app.route('/api/face/debug')
+def debug_status():
+    """Debug endpoint to check system status"""
+    try:
+        # Check FAISS index
+        index_exists = os.path.exists(os.path.join("embeddings", "face_index.faiss"))
+        labels_exists = os.path.exists(os.path.join("embeddings", "labels.npy"))
+
+        # Check database
+        session = SessionLocal()
+        persons = session.query(Person).all()
+        session.close()
+
+        # Check dataset
+        dataset_files = os.listdir(UPLOAD_FOLDER) if os.path.exists(UPLOAD_FOLDER) else []
+
+        return jsonify({
+            "status": "debug",
+            "faiss_index": "exists" if index_exists else "missing",
+            "labels": "exists" if labels_exists else "missing",
+            "registered_persons": len(persons),
+            "dataset_files": len(dataset_files),
+            "persons": [{"id": p.id, "name": p.name} for p in persons],
+            "recent_dataset": dataset_files[-5:] if dataset_files else []
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
 @app.route('/health')
 def health():
@@ -300,6 +344,7 @@ if __name__ == '__main__':
     print("   POST /api/face/register  - Register face")
     print("   POST /api/face/recognize - Recognize face")
     print("   GET  /api/face/persons   - Get all persons")
+    print("   GET  /api/face/debug     - Debug system status")
     print("   GET  /api/face/realtime/status - Real-time status")
     print("")
     print("🌐 Server running on http://localhost:5000")

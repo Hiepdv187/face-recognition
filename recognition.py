@@ -6,28 +6,57 @@ from database import SessionLocal
 from models import Person
 
 def recognize_face(img_path, k=1):
-    reps = DeepFace.represent(
-        img_path=img_path,
-        model_name=FACE_MODEL,
-        detector_backend=FACE_DETECTOR,
-        enforce_detection=False
-    )
-    if not reps:
-        return "NoFace", None
+    try:
+        print(f"🤖 Recognizing face from: {img_path}")
 
-    query_embedding = np.array([reps[0]["embedding"]]).astype("float32")
+        reps = DeepFace.represent(
+            img_path=img_path,
+            model_name=FACE_MODEL,
+            detector_backend=FACE_DETECTOR,
+            enforce_detection=False
+        )
 
-    index, labels = load_index()
-    if index is None:
-        return "NoIndex", None
+        print(f"📊 DeepFace found {len(reps) if reps else 0} faces")
 
-    D, I = index.search(query_embedding, k)
-    distance = D[0][0]
-    person_id = int(labels[I[0][0]])
+        if not reps:
+            print("⚠️ No faces detected by DeepFace")
+            return "NoFace", None
 
-    if distance > SIM_THRESHOLD:
-        return "Unknown", float(distance)
+        query_embedding = np.array([reps[0]["embedding"]]).astype("float32")
+        print(f"✅ Query embedding shape: {query_embedding.shape}")
 
-    session = SessionLocal()
-    person = session.query(Person).filter_by(id=person_id).first()
-    return person.name if person else "Unknown", float(distance)
+        index, labels = load_index()
+        print(f"📁 FAISS index: {'exists' if index is not None else 'None'}")
+        print(f"🏷️ Labels: {'exists' if labels is not None else 'None'}")
+
+        if index is None or labels is None:
+            print("❌ FAISS index or labels missing")
+            return "NoIndex", None
+
+        print(f"🔍 Searching in index with {len(labels)} entries")
+        D, I = index.search(query_embedding, k)
+        distance = D[0][0]
+        person_id = int(labels[I[0][0]])
+
+        print(f"🎯 Closest match: ID={person_id}, distance={distance}")
+
+        if distance > SIM_THRESHOLD:
+            print(f"❌ Distance {distance} > threshold {SIM_THRESHOLD}, returning Unknown")
+            return "Unknown", float(distance)
+
+        session = SessionLocal()
+        person = session.query(Person).filter_by(id=person_id).first()
+        session.close()
+
+        if person:
+            print(f"✅ Found person: {person.name}")
+            return person.name, float(distance)
+        else:
+            print(f"❌ Person ID {person_id} not found in database")
+            return "Unknown", float(distance)
+
+    except Exception as e:
+        print(f"❌ Recognition error: {str(e)}")
+        import traceback
+        print("📋 Traceback:", traceback.format_exc())
+        return "Error", None

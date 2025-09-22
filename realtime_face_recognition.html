@@ -234,6 +234,8 @@
                     <button id="startBtn" onclick="startCamera()">🎥 Start Camera</button>
                     <button id="captureBtn" onclick="captureFrame()" disabled>📸 Capture Frame</button>
                     <button id="registerBtn" onclick="registerCurrentFace()" disabled>👤 Register Face</button>
+                    <button id="debugBtn" onclick="debugSystem()">🔧 Debug</button>
+                    <button id="testBtn" onclick="testCapture()">🧪 Test</button>
                 </div>
             </div>
 
@@ -280,6 +282,8 @@
         // Initialize camera
         async function startCamera() {
             try {
+                console.log('📹 Starting camera...');
+
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         width: { ideal: 640 },
@@ -287,19 +291,35 @@
                     }
                 });
 
+                console.log('✅ Camera access granted');
+                console.log('🎥 Stream tracks:', stream.getTracks().length);
+                console.log('📹 Video track settings:', stream.getVideoTracks()[0].getSettings());
+
                 video.srcObject = stream;
                 document.getElementById('startBtn').disabled = true;
                 document.getElementById('captureBtn').disabled = false;
                 document.getElementById('registerBtn').disabled = false;
+                document.getElementById('testBtn').disabled = false;
 
                 addLog('Camera started successfully', 'success');
                 updateStatus('Camera active - Ready for recognition', 'recognizing');
+                console.log('🎥 Video element configured');
+
+                // Wait for video to load metadata
+                video.onloadedmetadata = function() {
+                    console.log('📊 Video metadata loaded');
+                    console.log('🎨 Video dimensions:', video.videoWidth, 'x', video.videoHeight);
+                };
 
                 // Start automatic recognition
                 startAutoRecognition();
 
             } catch (error) {
+                console.error('❌ Camera error:', error);
+                console.error('❌ Error name:', error.name);
+                console.error('❌ Error message:', error.message);
                 addLog('Error accessing camera: ' + error.message, 'error');
+                addLog('Error details: ' + error.name, 'error');
                 updateStatus('Camera access failed', 'error');
             }
         }
@@ -314,6 +334,7 @@
             document.getElementById('startBtn').disabled = false;
             document.getElementById('captureBtn').disabled = true;
             document.getElementById('registerBtn').disabled = true;
+            document.getElementById('testBtn').disabled = true;
 
             stopAutoRecognition();
             updateStatus('Camera stopped', '');
@@ -322,14 +343,19 @@
 
         // Automatic face recognition
         function startAutoRecognition() {
-            if (isRecognizing) return;
+            if (isRecognizing) {
+                console.log('⚠️ Recognition already running');
+                return;
+            }
 
             isRecognizing = true;
             recognitionInterval = setInterval(() => {
+                console.log('🔄 Recognition cycle triggered');
                 captureFrame();
             }, 2000); // Recognize every 2 seconds
 
             addLog('Auto recognition started', 'success');
+            console.log('✅ Auto recognition started');
         }
 
         function stopAutoRecognition() {
@@ -343,30 +369,67 @@
 
         // Capture frame and send for recognition
         async function captureFrame() {
-            if (!stream) return;
+            if (!stream) {
+                console.log('⚠️ No stream available');
+                return;
+            }
+
+            console.log('📸 Starting frame capture...');
 
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
+
+            console.log(`🎨 Canvas size: ${canvas.width}x${canvas.height}`);
+
             ctx.drawImage(video, 0, 0);
+            console.log('✅ Frame drawn to canvas');
 
             // Convert canvas to blob
             canvas.toBlob(async (blob) => {
+                if (!blob) {
+                    console.error('❌ Failed to create blob from canvas');
+                    addLog('Failed to capture image', 'error');
+                    return;
+                }
+
+                console.log('📊 Blob created, size:', blob.size, 'bytes');
+
+                if (blob.size < 1000) {
+                    console.warn('⚠️ Blob size too small, might be empty image');
+                    addLog('Image capture too small', 'warning');
+                }
+
                 const formData = new FormData();
                 formData.append('image', blob, 'frame.jpg');
 
                 try {
+                    console.log('🎥 Sending frame for recognition...');
+
                     const response = await fetch('/api/face/recognize', {
                         method: 'POST',
                         body: formData
                     });
 
+                    console.log('📡 Response status:', response.status);
+                    console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+
                     const result = await response.json();
+                    console.log('📄 Response JSON:', result);
+
+                    if (result.status === 'success') {
+                        console.log('✅ Recognition successful');
+                    } else {
+                        console.error('❌ Recognition failed:', result);
+                    }
+
                     displayRecognitionResult(result);
 
                 } catch (error) {
+                    console.error('❌ Network/Parse error:', error);
                     addLog('Recognition failed: ' + error.message, 'error');
+                    addLog('Error details: ' + error.stack, 'error');
                 }
-            }, 'image/jpeg', 0.8);
+            }, 'image/jpeg', 0.9);
         }
 
         // Display recognition result
@@ -469,22 +532,27 @@
             }
         }
 
-        // Display registered faces
-        function displayRegisteredFaces(persons) {
-            const faceGrid = document.getElementById('faceGrid');
-
-            if (persons.length === 0) {
-                faceGrid.innerHTML = '<p style="text-align: center; color: #666;">No registered faces</p>';
+        // Test capture function
+        async function testCapture() {
+            if (!stream) {
+                alert('❌ Please start camera first!');
                 return;
             }
 
-            faceGrid.innerHTML = persons.map(person => `
-                <div class="face-item">
-                    <div class="face-avatar-small">${person.name.charAt(0).toUpperCase()}</div>
-                    <div style="font-size: 12px; color: #333;">${person.name}</div>
-                    <div style="font-size: 10px; color: #666;">ID: ${person.id}</div>
-                </div>
-            `).join('');
+            addLog('Testing manual capture...', 'info');
+            console.log('🧪 Manual test capture initiated');
+
+            // Disable auto recognition temporarily
+            const wasRecognizing = isRecognizing;
+            if (isRecognizing) {
+                stopAutoRecognition();
+                setTimeout(() => {
+                    if (wasRecognizing) startAutoRecognition();
+                }, 5000); // Restart after 5 seconds
+            }
+
+            // Manual capture
+            await captureFrame();
         }
 
         // Initialize

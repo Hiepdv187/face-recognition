@@ -8,7 +8,8 @@ import io
 import base64
 import json
 from recognition import recognize_face
-from embeddings import add_embedding
+from embeddings import add_embedding, load_index
+from config import SIM_THRESHOLD
 from database import SessionLocal
 from models import Person
 import uuid
@@ -16,6 +17,44 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 import tensorflow as tf
 tf.get_logger().setLevel("ERROR")
+import sys
+
+# On Windows consoles the default encoding may not support emoji/unicode used
+# in some log prints. Reconfigure stdout/stderr to UTF-8 where possible and
+# enable PYTHONUTF8 to reduce chance of UnicodeEncodeError crashing the app.
+try:
+    import os
+    os.environ.setdefault('PYTHONUTF8', '1')
+except Exception:
+    pass
+
+try:
+    # Python 3.7+: reconfigure will set the encoding for stdout/stderr
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    # If reconfigure isn't available or fails, ignore and continue; prints
+    # will be sanitized where necessary.
+    pass
+
+# Reduce TF logs and preload model to avoid per-request heavy initialization
+try:
+    import os
+    os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
+except Exception:
+    pass
+
+READY_MODEL = False
+try:
+    # Preload DeepFace model to warm TF and reduce per-request initialization cost
+    from deepface import DeepFace
+    from config import FACE_MODEL
+    print('Loading face model:', FACE_MODEL)
+    _ = DeepFace.build_model(FACE_MODEL)
+    READY_MODEL = True
+    print('Model preloaded')
+except Exception as e:
+    print('Model preload failed:', str(e))
 
 app = Flask(__name__)
 CORS(app)
@@ -60,6 +99,12 @@ def home():
 def realtime():
     """Real-time face recognition interface"""
     return send_from_directory('.', 'realtime_face_recognition.html')
+
+
+@app.route('/dataset/<path:filename>')
+def serve_dataset_file(filename):
+    """Serve files from dataset folder (registered photos)."""
+    return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route('/smart-camera')
 def smart_camera():
@@ -173,46 +218,75 @@ def register_face():
     """Register face from uploaded image"""
     try:
         if 'image' not in request.files:
-            return jsonify({"status": "error", "message": "No image provided"})
+            return jsonify({"status": "error", "message": "No image provided"}), 400
 
         if 'name' not in request.form:
-            return jsonify({"status": "error", "message": "No name provided"})
+            return jsonify({"status": "error", "message": "No name provided"}), 400
 
         file = request.files['image']
         name = request.form['name']
 
         if file.filename == '':
-            return jsonify({"status": "error", "message": "No image selected"})
+            return jsonify({"status": "error", "message": "No image selected"}), 400
 
-        # Read image
+        # Read image bytes and convert
         img_bytes = file.read()
-        img = Image.open(io.BytesIO(img_bytes))
+        try:
+            img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        except Exception as e:
+            import traceback
+            print("❌ Failed to open uploaded image:", e)
+            print(traceback.format_exc())
+            return jsonify({"status": "error", "message": "Invalid image uploaded"}), 400
 
-        # Save to file
-        filename = f"register_{uuid.uuid4().hex}.jpg"
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        img.save(filepath)
-
-        # Get or create person
         session = SessionLocal()
-        person = session.query(Person).filter_by(name=name).first()
-        if not person:
-            person = Person(name=name)
-            session.add(person)
-            session.commit()
+        try:
+            # Get or create person so we can name the file with person id
+            person = session.query(Person).filter_by(name=name).first()
+            if not person:
+                person = Person(name=name)
+                session.add(person)
+                session.commit()
+                session.refresh(person)
 
-        # Add embedding
-        if add_embedding(filepath, person.id):
-            session.close()
-            return jsonify({
-                "status": "success",
-                "message": "Face registered successfully",
-                "person_id": person.id,
-                "name": person.name
-            })
-        else:
-            session.close()
-            return jsonify({"status": "error", "message": "Failed to add embedding"})
+            # Save to file with person id prefix for easy lookup
+            filename = f"{person.id}_{uuid.uuid4().hex}.jpg"
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            try:
+                img.save(filepath)
+            except Exception as e:
+                import traceback
+                print("❌ Failed to save uploaded image:", e)
+                print(traceback.format_exc())
+                return jsonify({"status": "error", "message": "Failed to save image"}), 500
+
+            # Add embedding (may raise) and return meaningful errors
+            try:
+                success = add_embedding(filepath, person.id)
+            except Exception as e:
+                import traceback
+                print(f"❌ Error adding embedding for person {person.id}: {e}")
+                print(traceback.format_exc())
+                return jsonify({"status": "error", "message": "Failed to add embedding"}), 500
+
+            if success:
+                # build absolute photo URL for convenience
+                host = request.host_url.rstrip('/')
+                photo_url = f"{host}/dataset/{filename}"
+                return jsonify({
+                    "status": "success",
+                    "message": "Face registered successfully",
+                    "person_id": person.id,
+                    "name": person.name,
+                    "photo": photo_url
+                })
+            else:
+                return jsonify({"status": "error", "message": "Failed to add embedding"}), 500
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
@@ -247,34 +321,151 @@ def recognize_face_api():
         img.save(filepath)
         print(f"💾 Saved to: {filepath}")
 
-        # Recognize face
+        # Recognize face: compute embedding and query index for top-1 match
         print("🤖 Starting face recognition...")
-        name, distance = recognize_face(filepath)
-        print(f"✅ Recognition result: name={name}, distance={distance}")
+        try:
+            from deepface import DeepFace
+            reps = DeepFace.represent(img_path=filepath, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
+        except Exception as e:
+            print('Recognition deepface error:', e)
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+            return jsonify({'status': 'error', 'message': 'Failed to compute embedding'}), 500
+
+        if not reps:
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+            return jsonify({'status': 'error', 'message': 'No face detected'}), 200
+
+        # Try to crop for better embedding if facial_area provided
+        embedding = None
+        facial_area = reps[0].get('facial_area') if isinstance(reps[0], dict) else None
+        if facial_area:
+            try:
+                from PIL import Image
+                orig = Image.open(filepath).convert('RGB')
+                if isinstance(facial_area, (list, tuple)) and len(facial_area) == 4:
+                    x, y, w, h = facial_area
+                elif isinstance(facial_area, dict) and {'x','y','w','h'}.issubset(facial_area.keys()):
+                    x = facial_area['x']; y = facial_area['y']; w = facial_area['w']; h = facial_area['h']
+                else:
+                    x = y = w = h = None
+
+                if x is not None:
+                    left = int(max(0, x)); top = int(max(0, y))
+                    right = int(min(orig.width, x + w)); bottom = int(min(orig.height, y + h))
+                    pad_w = int((right - left) * 0.15); pad_h = int((bottom - top) * 0.15)
+                    left = max(0, left - pad_w); top = max(0, top - pad_h)
+                    right = min(orig.width, right + pad_w); bottom = min(orig.height, bottom + pad_h)
+                    crop = orig.crop((left, top, right, bottom))
+                    tmp_crop = os.path.join(UPLOAD_FOLDER, f"tmp_recog_crop_{uuid.uuid4().hex}.jpg")
+                    crop.save(tmp_crop)
+                    try:
+                        reps_crop = DeepFace.represent(img_path=tmp_crop, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
+                        if reps_crop and isinstance(reps_crop, list) and 'embedding' in reps_crop[0]:
+                            embedding = np.array(reps_crop[0]['embedding'], dtype='float32')
+                    finally:
+                        try: os.remove(tmp_crop)
+                        except: pass
+            except Exception:
+                embedding = None
+
+        if embedding is None:
+            try:
+                embedding = np.array(reps[0]['embedding'], dtype='float32')
+            except Exception:
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+                return jsonify({'status': 'error', 'message': 'Failed to extract embedding'}), 500
+
+        # Normalize
+        try:
+            qnorm = np.linalg.norm(embedding)
+            if qnorm == 0: qnorm = 1.0
+            qvec = (embedding / qnorm).astype('float32')
+        except Exception:
+            qvec = embedding.astype('float32')
+
+        # Query FAISS
+        index, labels = load_index()
+        if index is None or labels is None:
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+            return jsonify({'status': 'error', 'message': 'Index or labels missing'}), 500
+
+        D, I = index.search(np.array([qvec]), 1)
+        best_idx = int(I[0][0])
+        raw_dist = float(D[0][0])
+
+        # Try to reconstruct vector for accurate L2 and cosine
+        vec = None
+        try:
+            vec = np.zeros((index.d,), dtype='float32')
+            index.reconstruct(best_idx, vec)
+        except Exception:
+            vec = None
+
+        l2 = raw_dist if vec is None else float(np.linalg.norm(qvec - vec))
+        cosine = None
+        if vec is not None:
+            try:
+                cosine = float(np.dot(qvec, vec) / (np.linalg.norm(qvec) * (np.linalg.norm(vec) or 1.0)))
+            except Exception:
+                cosine = None
+
+        person_id = int(labels[best_idx]) if labels is not None and len(labels) > best_idx else None
+        name = None
+        photo = None
+        try:
+            session = SessionLocal()
+            p = session.query(Person).filter_by(id=person_id).first()
+            if p:
+                name = p.name
+                # find photo
+                for fname in os.listdir(UPLOAD_FOLDER):
+                    if fname.startswith(f"{person_id}_"):
+                        host = request.host_url.rstrip('/')
+                        photo = f"{host}/dataset/{fname}"
+                        break
+            session.close()
+        except Exception:
+            name = None
 
         # Clean up temp file
         try:
             os.remove(filepath)
-            print(f"🗑️ Cleaned up: {filepath}")
         except:
-            print(f"⚠️ Failed to clean up: {filepath}")
             pass
 
-        # Ensure distance is a float and compute a normalized confidence in (0,1]
-        try:
-            distance = float(distance)
-        except Exception:
-            distance = 1.0
+        # Build confidence from cosine if available, else from l2
+        if cosine is not None:
+            # map [-1,1] -> [0,1]
+            confidence = max(0.0, min(1.0, (cosine + 1.0) / 2.0))
+        else:
+            confidence = 1.0 / (1.0 + max(0.0, l2 or 1e9))
 
-        # Convert distance to a simple confidence score: confidence = 1 / (1 + distance)
-        # This maps lower distances (better match) to higher confidence in (0, 1].
-        confidence = 1.0 / (1.0 + max(0.0, distance))
+        # Apply similarity threshold for recognition decision
+        if confidence < SIM_THRESHOLD:
+            person_id = None
+            name = 'Unknown'
 
         return jsonify({
-            "status": "success",
-            "name": name,
-            "distance": distance,
-            "confidence": confidence
+            'status': 'success',
+            'person_id': person_id,
+            'name': name or 'Unknown',
+            'l2': l2,
+            'cosine': cosine,
+            'distance': l2,
+            'confidence': confidence,
+            'photo': photo
         })
 
     except Exception as e:
@@ -292,9 +483,22 @@ def get_persons():
 
         result = []
         for person in persons:
+            # try to find an image file with prefix {person.id}_ in dataset
+            photo_url = None
+            try:
+                for fname in os.listdir(UPLOAD_FOLDER):
+                    if fname.startswith(f"{person.id}_"):
+                        # make absolute URL
+                        host = request.host_url.rstrip('/')
+                        photo_url = f"{host}/dataset/{fname}"
+                        break
+            except Exception:
+                photo_url = None
+
             result.append({
                 "id": person.id,
-                "name": person.name
+                "name": person.name,
+                "photo": photo_url
             })
 
         session.close()
@@ -334,6 +538,167 @@ def debug_status():
             "status": "error",
             "message": str(e)
         })
+
+
+@app.route('/api/face/rebuild', methods=['POST'])
+def rebuild_index():
+    """Trigger a rebuild of the FAISS index from dataset files."""
+    try:
+        from embeddings import rebuild_index_from_dataset
+        count = rebuild_index_from_dataset(UPLOAD_FOLDER)
+        return jsonify({"status": "success", "message": "Rebuilt index", "entries": count})
+    except Exception as e:
+        import traceback
+        print("❌ Rebuild error:", traceback.format_exc())
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@app.route('/api/face/compare', methods=['POST'])
+def compare_face():
+    """Return embedding and top-K matches (label, L2, cosine) for debugging/tuning."""
+    try:
+        if 'image' not in request.files:
+            return jsonify({'status': 'error', 'message': 'No image provided'}), 400
+
+        file = request.files['image']
+        if file.filename == '':
+            return jsonify({'status': 'error', 'message': 'Empty filename'}), 400
+
+        # Save temp
+        img_bytes = file.read()
+        from PIL import Image
+        import os, uuid
+        tmp_path = os.path.join(UPLOAD_FOLDER, f"tmp_compare_{uuid.uuid4().hex}.jpg")
+        try:
+            img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+            img.save(tmp_path)
+        except Exception as e:
+            return jsonify({'status': 'error', 'message': 'Invalid image'}), 400
+
+        # Compute embedding similarly to registration/recognition
+        try:
+            from deepface import DeepFace
+            reps = DeepFace.represent(img_path=tmp_path, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
+        except Exception as e:
+            os.remove(tmp_path)
+            return jsonify({'status': 'error', 'message': f'DeepFace error: {str(e)}'}), 500
+
+        if not reps:
+            os.remove(tmp_path)
+            return jsonify({'status': 'error', 'message': 'No face detected'}), 200
+
+        # Try to use facial_area to crop and recompute embedding for accuracy
+        embedding = None
+        facial_area = reps[0].get('facial_area') if isinstance(reps[0], dict) else None
+        if facial_area:
+            try:
+                orig = Image.open(tmp_path).convert('RGB')
+                if isinstance(facial_area, (list, tuple)) and len(facial_area) == 4:
+                    x, y, w, h = facial_area
+                elif isinstance(facial_area, dict) and {'x','y','w','h'}.issubset(facial_area.keys()):
+                    x = facial_area['x']; y = facial_area['y']; w = facial_area['w']; h = facial_area['h']
+                else:
+                    x = y = w = h = None
+
+                if x is not None:
+                    left = int(max(0, x)); top = int(max(0, y))
+                    right = int(min(orig.width, x + w)); bottom = int(min(orig.height, y + h))
+                    pad_w = int((right - left) * 0.15); pad_h = int((bottom - top) * 0.15)
+                    left = max(0, left - pad_w); top = max(0, top - pad_h)
+                    right = min(orig.width, right + pad_w); bottom = min(orig.height, bottom + pad_h)
+                    crop = orig.crop((left, top, right, bottom))
+                    tmp_crop = os.path.join(UPLOAD_FOLDER, f"tmp_compare_crop_{uuid.uuid4().hex}.jpg")
+                    crop.save(tmp_crop)
+                    try:
+                        reps_crop = DeepFace.represent(img_path=tmp_crop, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
+                        if reps_crop and isinstance(reps_crop, list) and 'embedding' in reps_crop[0]:
+                            embedding = np.array(reps_crop[0]['embedding'], dtype='float32')
+                    finally:
+                        try: os.remove(tmp_crop)
+                        except: pass
+            except Exception:
+                embedding = None
+
+        if embedding is None:
+            try:
+                embedding = np.array(reps[0]['embedding'], dtype='float32')
+            except Exception:
+                os.remove(tmp_path)
+                return jsonify({'status': 'error', 'message': 'Failed to extract embedding'}), 500
+
+        # Normalize query
+        try:
+            qnorm = np.linalg.norm(embedding)
+            if qnorm == 0: qnorm = 1.0
+            qvec = (embedding / qnorm).astype('float32')
+        except Exception:
+            qvec = embedding.astype('float32')
+
+        # Load index
+        index, labels = load_index()
+        if index is None or labels is None:
+            os.remove(tmp_path)
+            return jsonify({'status': 'error', 'message': 'Index or labels missing'}), 500
+
+        k = int(request.args.get('k', 5))
+        # Cap k to the number of entries in the index to avoid -1/NaN results
+        k = max(1, min(k, int(index.ntotal)))
+        D, I = index.search(np.array([qvec]), k)
+
+        results = []
+        for dist_list, idx_list in zip(D, I):
+            for dist, idx in zip(dist_list, idx_list):
+                if int(idx) < 0:
+                    # invalid index returned by FAISS when k > ntotal
+                    continue
+
+                try:
+                    vec = np.zeros((index.d, ), dtype='float32')
+                    index.reconstruct(int(idx), vec)
+                except Exception:
+                    # if reconstruct not supported, treat vec as None
+                    vec = None
+
+                # compute l2 and cosine safely
+                try:
+                    l2 = float(dist) if vec is None else float(np.linalg.norm(qvec - vec))
+                except Exception:
+                    l2 = None
+
+                cos = None
+                if vec is not None:
+                    try:
+                        cos = float(np.dot(qvec, vec) / (np.linalg.norm(qvec) * (np.linalg.norm(vec) or 1.0)))
+                    except Exception:
+                        cos = None
+
+                person_id = int(labels[int(idx)]) if labels is not None and len(labels) > int(idx) else None
+                # lookup name
+                name = None
+                try:
+                    session = SessionLocal()
+                    p = session.query(Person).filter_by(id=person_id).first()
+                    if p:
+                        name = p.name
+                    session.close()
+                except Exception:
+                    name = None
+
+                results.append({
+                    'label_index': int(idx),
+                    'person_id': person_id,
+                    'name': name,
+                    'l2': l2,
+                    'cosine': cos
+                })
+
+        os.remove(tmp_path)
+        return jsonify({'status': 'success', 'results': results, 'query_norm': float(np.linalg.norm(qvec))})
+
+    except Exception as e:
+        import traceback
+        print('Compare error:', traceback.format_exc())
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/health')
 def health():

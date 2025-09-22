@@ -570,8 +570,32 @@
 
             console.log(`🎨 Canvas size: ${canvas.width}x${canvas.height}`);
 
-            // Convert canvas to blob
-            canvas.toBlob(async (blob) => {
+            // If fast-mode is enabled, downscale client-side to reduce upload and speed server-side detection
+            const fast = true; // toggle fast-mode here
+            let sendBlobPromise;
+
+            if (fast) {
+                // target downscale size (maintain aspect ratio)
+                const targetWidth = 320;
+                const scale = Math.min(1, targetWidth / canvas.width);
+                const smallW = Math.max(1, Math.round(canvas.width * scale));
+                const smallH = Math.max(1, Math.round(canvas.height * scale));
+
+                const smallCanvas = document.createElement('canvas');
+                smallCanvas.width = smallW;
+                smallCanvas.height = smallH;
+                const sctx = smallCanvas.getContext('2d');
+                // Draw scaled image
+                sctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, smallW, smallH);
+                console.log(`🔽 Downscaled to: ${smallW}x${smallH} for fast upload`);
+
+                sendBlobPromise = new Promise((resolve) => smallCanvas.toBlob(resolve, 'image/jpeg', 0.75));
+            } else {
+                // full resolution
+                sendBlobPromise = new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+            }
+
+            sendBlobPromise.then(async (blob) => {
                 if (!blob) {
                     console.error('❌ Failed to create blob from canvas');
                     addLog('Failed to capture image', 'error');
@@ -585,16 +609,20 @@
                     addLog('Image capture too small', 'warning');
                 }
 
-                const formData = new FormData();
-                formData.append('image', blob, 'frame.jpg');
+                    // prepare form data
+                    const formData = new FormData();
+                    formData.append('image', blob, 'frame.jpg');
 
-                try {
-                    console.log('🎥 Sending frame for recognition...');
+                    try {
+                        console.log('🎥 Sending frame for recognition...');
 
-                    const response = await fetch('/api/face/recognize', {
-                        method: 'POST',
-                        body: formData
-                    });
+                        // If fast-mode is desired, call the server with ?fast=1
+                        const fast = true; // toggle fast-mode here
+                        const url = fast ? '/api/face/recognize?fast=1' : '/api/face/recognize';
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            body: formData
+                        });
 
                     console.log('📡 Response status:', response.status);
                     console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));

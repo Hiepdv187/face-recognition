@@ -32,7 +32,7 @@ Cách 2: Cài đặt trực tiếp
    pip install -r requirements.txt
 
 3. Khởi động ứng dụng:
-   python app_realtime.py
+   python -3 app_realtime.py
 
 4. Ứng dụng sẽ chạy trên http://localhost:5000
 

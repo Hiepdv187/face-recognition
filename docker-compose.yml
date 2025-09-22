@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   face-recognition:
     build: .
@@ -12,8 +10,10 @@ services:
       - ./embeddings:/app/embeddings
     networks:
       - app-network
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://your_user:your_password@postgres:5432/your_db
+      - DATABASE_URL=${FACE_DB_URL}
 
   golang-service:
     build:
@@ -23,29 +23,13 @@ services:
     restart: always
     ports:
       - "8080:8080"  # Adjust port as needed for your Golang app
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://your_user:your_password@postgres:5432/your_db
+      - DATABASE_URL=${GO_DB_URL}
       - FACE_API_URL=http://face-recognition:5000
     networks:
       - app-network
-    depends_on:
-      - postgres
-      - face-recognition
-
-  postgres:
-    image: postgres:15
-    container_name: shared_postgres
-    restart: always
-    environment:
-      - POSTGRES_DB=your_db
-      - POSTGRES_USER=your_user
-      - POSTGRES_PASSWORD=your_password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - app-network
-    ports:
-      - "5432:5432"
 
   nginx:
     image: nginx:latest
@@ -64,6 +48,3 @@ services:
 networks:
   app-network:
     driver: bridge
-
-volumes:
-  postgres_data:

@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📹 Smart Camera Face Recognition</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 25px;
+            padding: 30px;
+            box-shadow: 0 25px 80px rgba(0,0,0,0.2);
+            max-width: 1200px;
+            width: 100%;
+            margin-top: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        h1 {
+            text-align: center;
+            color: #1e3c72;
+            margin-bottom: 30px;
+            font-size: 2.8em;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .camera-section {
+            display: flex;
+            gap: 30px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .camera-container {
+            flex: 1;
+            min-width: 300px;
+            text-align: center;
+        }
+
+        .video-wrapper {
+            position: relative;
+            display: inline-block;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+
+        video {
+            width: 100%;
+            max-width: 640px;
+            border-radius: 20px;
+            display: block;
+        }
+
+        #overlayCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            border-radius: 20px;
+        }
+
+        .controls {
+            margin: 25px 0;
+        }
+
+        button {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            border: none;
+            padding: 18px 35px;
+            border-radius: 50px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 0 15px;
+            box-shadow: 0 8px 25px rgba(30, 60, 114, 0.3);
+        }
+
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(30, 60, 114, 0.4);
+        }
+
+        button:active {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        button.recording {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 8px 25px rgba(220, 53, 69, 0.3); }
+            50% { box-shadow: 0 15px 35px rgba(220, 53, 69, 0.6); }
+            100% { box-shadow: 0 8px 25px rgba(220, 53, 69, 0.3); }
+        }
+
+        .status {
+            padding: 20px;
+            border-radius: 15px;
+            margin: 20px 0;
+            text-align: center;
+            font-weight: bold;
+            font-size: 18px;
+            transition: all 0.3s ease;
+        }
+
+        .status.recognizing {
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+            color: #856404;
+            border: 2px solid #ffecb5;
+        }
+
+        .status.recognized {
+            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+            color: #155724;
+            border: 2px solid #c3e6cb;
+        }
+
+        .status.error {
+            background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+        }
+
+        .result {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 25px;
+            border-radius: 20px;
+            margin-top: 25px;
+            backdrop-filter: blur(10px);
+        }
+
+        .person-info {
+            text-align: center;
+            padding: 25px;
+        }
+
+        .person-avatar {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 48px;
+            font-weight: bold;
+            box-shadow: 0 10px 30px rgba(30, 60, 114, 0.3);
+        }
+
+        .person-name {
+            font-size: 28px;
+            font-weight: bold;
+            color: #1e3c72;
+            margin-bottom: 15px;
+        }
+
+        .confidence {
+            font-size: 20px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+
+        .timestamp {
+            font-size: 14px;
+            color: #999;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-item {
+            background: rgba(30, 60, 114, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1e3c72;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .registered-faces {
+            margin-top: 30px;
+        }
+
+        .face-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .face-item {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: transform 0.2s ease;
+        }
+
+        .face-item:hover {
+            transform: translateY(-5px);
+        }
+
+        .face-avatar-small {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            margin: 0 auto 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        .logs {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 15px;
+            padding: 20px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            backdrop-filter: blur(10px);
+        }
+
+        .log-entry {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+        }
+
+        .log-time {
+            color: #666;
+            margin-right: 15px;
+            font-weight: bold;
+            min-width: 80px;
+        }
+
+        .log-info { color: #007bff; }
+        .log-success { color: #28a745; }
+        .log-warning { color: #ffc107; }
+        .log-error { color: #dc3545; }
+
+        @media (max-width: 768px) {
+            .camera-section {
+                flex-direction: column;
+            }
+
+            h1 {
+                font-size: 2.2em;
+            }
+
+            .controls {
+                display: flex;
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+
+            button {
+                margin: 5px;
+                padding: 15px 25px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📹 Smart Camera Face Recognition</h1>
+
+        <div class="camera-section">
+            <div class="camera-container">
+                <h3 style="color: #1e3c72; margin-bottom: 20px;">🎥 Live Camera Feed</h3>
+                <div class="video-wrapper">
+                    <video id="video" autoplay playsinline muted></video>
+                    <canvas id="overlayCanvas"></canvas>
+                </div>
+
+                <div class="controls">
+                    <button id="startBtn" onclick="startCamera()">🎥 Start Camera</button>
+                    <button id="stopBtn" onclick="stopCamera()" disabled>⏹️ Stop Camera</button>
+                    <button id="registerBtn" onclick="registerCurrentFace()" disabled>👤 Register Face</button>
+                </div>
+
+                <div id="status" class="status">⏹️ Camera stopped</div>
+            </div>
+
+            <div class="camera-container">
+                <h3 style="color: #1e3c72; margin-bottom: 20px;">📊 Recognition Results</h3>
+
+                <div id="result" class="result" style="display: none;">
+                    <div class="person-info">
+                        <div class="person-avatar" id="personAvatar">👤</div>
+                        <div class="person-name" id="personName">Unknown Person</div>
+                        <div class="confidence" id="confidence">Confidence: 0%</div>
+                        <div class="timestamp" id="timestamp">Last updated: Never</div>
+                    </div>
+
+                    <div class="stats">
+                        <div class="stat-item">
+                            <div class="stat-value" id="totalRecognitions">0</div>
+                            <div class="stat-label">Total Recognitions</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="accuracyRate">0%</div>
+                            <div class="stat-label">Accuracy Rate</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="avgConfidence">0%</div>
+                            <div class="stat-label">Avg Confidence</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="registered-faces">
+            <h3 style="color: #1e3c72; margin-bottom: 20px;">👥 Registered Faces</h3>
+            <div id="faceGrid" class="face-grid">
+                <!-- Registered faces will be displayed here -->
+            </div>
+        </div>
+
+        <div class="logs">
+            <h4 style="color: #1e3c72; margin-bottom: 15px;">📋 Activity Logs</h4>
+            <div id="logs">
+                <div class="log-entry">
+                    <span class="log-time">14:12:58</span>
+                    <span class="log-info">Smart Camera System initialized</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let video = document.getElementById('video');
+        let overlayCanvas = document.getElementById('overlayCanvas');
+        let overlayCtx = overlayCanvas.getContext('2d');
+        let stream = null;
+        let isRecognizing = false;
+        let recognitionInterval = null;
+        let recognitionHistory = [];
+
+        // Initialize camera
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+
+                video.srcObject = stream;
+
+                // Set canvas size when video loads
+                video.onloadedmetadata = function() {
+                    overlayCanvas.width = video.videoWidth;
+                    overlayCanvas.height = video.videoHeight;
+                    drawOverlay();
+                };
+
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                document.getElementById('registerBtn').disabled = false;
+
+                addLog('Camera started successfully', 'success');
+                updateStatus('Camera active - Starting recognition...', 'recognizing');
+
+                // Start automatic recognition
+                startAutoRecognition();
+
+            } catch (error) {
+                addLog('Error accessing camera: ' + error.message, 'error');
+                updateStatus('Camera access failed', 'error');
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+
+            video.srcObject = null;
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('registerBtn').disabled = true;
+
+            stopAutoRecognition();
+            updateStatus('Camera stopped', '');
+            addLog('Camera stopped', 'info');
+
+            // Hide result
+            document.getElementById('result').style.display = 'none';
+        }
+
+        // Draw overlay on canvas
+        function drawOverlay() {
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            // Draw face detection box (simulated)
+            const centerX = overlayCanvas.width / 2;
+            const centerY = overlayCanvas.height / 2;
+            const boxSize = Math.min(overlayCanvas.width, overlayCanvas.height) * 0.4;
+
+            // Face detection area
+            overlayCtx.strokeStyle = 'rgba(30, 60, 114, 0.8)';
+            overlayCtx.lineWidth = 3;
+            overlayCtx.setLineDash([10, 5]);
+            overlayCtx.strokeRect(
+                centerX - boxSize/2,
+                centerY - boxSize/2,
+                boxSize,
+                boxSize
+            );
+
+            // Corner brackets
+            const bracketSize = 20;
+            overlayCtx.setLineDash([]);
+
+            // Top-left corner
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(centerX - boxSize/2, centerY - boxSize/2 + bracketSize);
+            overlayCtx.lineTo(centerX - boxSize/2, centerY - boxSize/2);
+            overlayCtx.lineTo(centerX - boxSize/2 + bracketSize, centerY - boxSize/2);
+
+            // Top-right corner
+            overlayCtx.moveTo(centerX + boxSize/2 - bracketSize, centerY - boxSize/2);
+            overlayCtx.lineTo(centerX + boxSize/2, centerY - boxSize/2);
+            overlayCtx.lineTo(centerX + boxSize/2, centerY - boxSize/2 + bracketSize);
+
+            // Bottom-left corner
+            overlayCtx.moveTo(centerX - boxSize/2, centerY + boxSize/2 - bracketSize);
+            overlayCtx.lineTo(centerX - boxSize/2, centerY + boxSize/2);
+            overlayCtx.lineTo(centerX - boxSize/2 + bracketSize, centerY + boxSize/2);
+
+            // Bottom-right corner
+            overlayCtx.moveTo(centerX + boxSize/2 - bracketSize, centerY + boxSize/2);
+            overlayCtx.lineTo(centerX + boxSize/2, centerY + boxSize/2);
+            overlayCtx.lineTo(centerX + boxSize/2, centerY + boxSize/2 - bracketSize);
+
+            overlayCtx.stroke();
+
+            // Scanning line animation
+            const time = Date.now() * 0.002;
+            const y = centerY - boxSize/2 + (Math.sin(time) + 1) * boxSize / 2;
+
+            overlayCtx.strokeStyle = 'rgba(42, 82, 152, 0.8)';
+            overlayCtx.lineWidth = 2;
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(centerX - boxSize/2, y);
+            overlayCtx.lineTo(centerX + boxSize/2, y);
+            overlayCtx.stroke();
+        }
+
+        // Automatic face recognition
+        function startAutoRecognition() {
+            if (isRecognizing) return;
+
+            isRecognizing = true;
+            document.getElementById('startBtn').classList.add('recording');
+
+            recognitionInterval = setInterval(() => {
+                recognizeFrame();
+            }, 1500); // Recognize every 1.5 seconds
+
+            addLog('Auto recognition started', 'success');
+        }
+
+        function stopAutoRecognition() {
+            if (recognitionInterval) {
+                clearInterval(recognitionInterval);
+                recognitionInterval = null;
+            }
+            isRecognizing = false;
+            document.getElementById('startBtn').classList.remove('recording');
+            addLog('Auto recognition stopped', 'info');
+        }
+
+        // Capture frame and send for recognition
+        async function recognizeFrame() {
+            if (!stream) return;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('image', blob, 'frame.jpg');
+
+                try {
+                    const response = await fetch('/api/face/recognize', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const result = await response.json();
+                    displayRecognitionResult(result);
+
+                    // Update overlay with recognition result
+                    drawOverlayWithResult(result);
+
+                } catch (error) {
+                    addLog('Recognition failed: ' + error.message, 'error');
+                    drawOverlayWithResult({ name: 'Unknown', distance: 1.0 });
+                }
+            }, 'image/jpeg', 0.9);
+        }
+
+        // Display recognition result on overlay
+        function drawOverlayWithResult(result) {
+            const centerX = overlayCanvas.width / 2;
+            const centerY = overlayCanvas.height / 2 - 50;
+
+            // Clear canvas first
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            // Draw base overlay
+            drawOverlay();
+
+            // Draw recognition result
+            if (result.name && result.name !== 'Unknown') {
+                // Success - green text
+                overlayCtx.fillStyle = 'rgba(40, 167, 69, 0.9)';
+                overlayCtx.font = 'bold 32px Arial';
+                overlayCtx.textAlign = 'center';
+
+                const nameText = `✅ ${result.name}`;
+                overlayCtx.fillText(nameText, centerX, centerY);
+
+                const confidence = Math.round((1 - result.distance) * 100);
+                overlayCtx.font = 'bold 20px Arial';
+                overlayCtx.fillText(`${confidence}% Confidence`, centerX, centerY + 35);
+
+                // Add glow effect
+                overlayCtx.shadowColor = 'rgba(40, 167, 69, 0.5)';
+                overlayCtx.shadowBlur = 10;
+                overlayCtx.fillText(nameText, centerX, centerY);
+                overlayCtx.shadowBlur = 0;
+
+            } else {
+                // Unknown person - red text
+                overlayCtx.fillStyle = 'rgba(220, 53, 69, 0.9)';
+                overlayCtx.font = 'bold 28px Arial';
+                overlayCtx.textAlign = 'center';
+                overlayCtx.fillText('❌ Unknown Person', centerX, centerY);
+
+                overlayCtx.font = 'bold 16px Arial';
+                overlayCtx.fillText('Position face in frame', centerX, centerY + 30);
+
+                // Add glow effect
+                overlayCtx.shadowColor = 'rgba(220, 53, 69, 0.5)';
+                overlayCtx.shadowBlur = 8;
+                overlayCtx.fillText('❌ Unknown Person', centerX, centerY);
+                overlayCtx.shadowBlur = 0;
+            }
+        }
+
+        // Display recognition result
+        function displayRecognitionResult(result) {
+            const resultDiv = document.getElementById('result');
+            const personName = document.getElementById('personName');
+            const confidence = document.getElementById('confidence');
+            const personAvatar = document.getElementById('personAvatar');
+            const timestamp = document.getElementById('timestamp');
+            const totalRecognitions = document.getElementById('totalRecognitions');
+            const accuracyRate = document.getElementById('accuracyRate');
+            const avgConfidence = document.getElementById('avgConfidence');
+
+            // Update recognition history
+            recognitionHistory.push(result);
+            if (recognitionHistory.length > 100) {
+                recognitionHistory.shift();
+            }
+
+            // Calculate statistics
+            const recognizedCount = recognitionHistory.filter(r => r.name && r.name !== 'Unknown').length;
+            const accuracy = recognitionHistory.length > 0 ? Math.round((recognizedCount / recognitionHistory.length) * 100) : 0;
+            const avgConf = recognitionHistory.length > 0 ?
+                Math.round(recognitionHistory.reduce((sum, r) => sum + (1 - (r.distance || 1)), 0) / recognitionHistory.length * 100) : 0;
+
+            if (result.status === 'success' && result.name && result.name !== 'Unknown') {
+                resultDiv.style.display = 'block';
+                personName.textContent = result.name;
+                personName.style.color = '#28a745';
+                confidence.textContent = `Confidence: ${Math.round((1 - result.distance) * 100)}%`;
+                personAvatar.textContent = result.name.charAt(0).toUpperCase();
+                personAvatar.style.background = 'linear-gradient(135deg, #28a745 0%, #20c997 100%)';
+                timestamp.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+                updateStatus(`✅ Recognized: ${result.name}`, 'recognized');
+
+                totalRecognitions.textContent = recognizedCount;
+                accuracyRate.textContent = `${accuracy}%`;
+                avgConfidence.textContent = `${avgConf}%`;
+
+                addLog(`✅ Face recognized: ${result.name} (${Math.round((1 - result.distance) * 100)}% confidence)`, 'success');
+            } else {
+                resultDiv.style.display = 'block';
+                personName.textContent = 'Unknown Person';
+                personName.style.color = '#dc3545';
+                confidence.textContent = 'No face detected';
+                personAvatar.textContent = '❓';
+                personAvatar.style.background = 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)';
+                timestamp.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+                updateStatus('❌ No face recognized', 'recognizing');
+
+                totalRecognitions.textContent = recognizedCount;
+                accuracyRate.textContent = `${accuracy}%`;
+                avgConfidence.textContent = `${avgConf}%`;
+
+                if (result.name === 'Unknown') {
+                    addLog('❌ Unknown face detected', 'warning');
+                }
+            }
+        }
+
+        // Update status
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+        }
+
+        // Add log entry
+        function addLog(message, type) {
+            const logsDiv = document.getElementById('logs');
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+
+            const now = new Date();
+            const time = now.getHours().toString().padStart(2, '0') + ':' +
+                        now.getMinutes().toString().padStart(2, '0') + ':' +
+                        now.getSeconds().toString().padStart(2, '0');
+
+            logEntry.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">${message}</span>`;
+            logsDiv.appendChild(logEntry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        // Register current face
+        async function registerCurrentFace() {
+            const personName = prompt('Enter name for registration:');
+            if (!personName || !personName.trim()) return;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0);
+
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('image', blob, 'registration.jpg');
+                formData.append('name', personName.trim());
+
+                try {
+                    const response = await fetch('/api/face/register', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const result = await response.json();
+
+                    if (result.status === 'success') {
+                        addLog(`✅ Face registered: ${personName}`, 'success');
+                        loadRegisteredFaces();
+                        alert(`✅ Face registered successfully!\nName: ${personName}\nID: ${result.person_id}`);
+
+                        // Update overlay to show registration success
+                        drawOverlayWithResult({ name: personName, distance: 0 });
+                    } else {
+                        addLog(`❌ Registration failed: ${result.message}`, 'error');
+                        alert('❌ Registration failed: ' + result.message);
+                    }
+
+                } catch (error) {
+                    addLog('❌ Registration error: ' + error.message, 'error');
+                    alert('❌ Registration error: ' + error.message);
+                }
+            }, 'image/jpeg', 0.9);
+        }
+
+        // Load registered faces
+        async function loadRegisteredFaces() {
+            try {
+                const response = await fetch('/api/face/persons');
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    displayRegisteredFaces(result.persons || []);
+                }
+            } catch (error) {
+                addLog('❌ Failed to load registered faces', 'error');
+            }
+        }
+
+        // Display registered faces
+        function displayRegisteredFaces(persons) {
+            const faceGrid = document.getElementById('faceGrid');
+
+            if (persons.length === 0) {
+                faceGrid.innerHTML = '<p style="text-align: center; color: #666; grid-column: 1 / -1;">No registered faces</p>';
+                return;
+            }
+
+            faceGrid.innerHTML = persons.map(person => `
+                <div class="face-item">
+                    <div class="face-avatar-small">${person.name.charAt(0).toUpperCase()}</div>
+                    <div style="font-size: 14px; color: #1e3c72; font-weight: bold;">${person.name}</div>
+                    <div style="font-size: 12px; color: #666;">ID: ${person.id}</div>
+                </div>
+            `).join('');
+        }
+
+        // Animation loop for overlay
+        function animate() {
+            if (stream && !isRecognizing) {
+                drawOverlay();
+            }
+            requestAnimationFrame(animate);
+        }
+
+        // Initialize
+        window.addEventListener('load', () => {
+            addLog('📹 Smart Camera System initialized', 'info');
+            loadRegisteredFaces();
+            animate(); // Start animation loop
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            stopCamera();
+            stopAutoRecognition();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Real-time Face Recognition</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+            max-width: 1200px;
+            width: 100%;
+            margin-top: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+
+        .camera-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        .camera-container {
+            text-align: center;
+        }
+
+        video, canvas {
+            width: 100%;
+            max-width: 500px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .controls {
+            margin: 20px 0;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 0 10px;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .status.recognizing {
+            background: #fff3cd;
+            color: #856404;
+            animation: pulse 2s infinite;
+        }
+
+        .status.recognized {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        .result {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 15px;
+            margin-top: 20px;
+        }
+
+        .person-info {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .person-avatar {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0 auto 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 40px;
+            font-weight: bold;
+        }
+
+        .person-name {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .confidence {
+            font-size: 18px;
+            color: #666;
+        }
+
+        .registered-faces {
+            margin-top: 30px;
+        }
+
+        .face-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .face-item {
+            text-align: center;
+            padding: 10px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .face-avatar-small {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0 auto 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .logs {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .log-time {
+            color: #666;
+            margin-right: 10px;
+        }
+
+        .log-info { color: #007bff; }
+        .log-success { color: #28a745; }
+        .log-warning { color: #ffc107; }
+        .log-error { color: #dc3545; }
+
+        @media (max-width: 768px) {
+            .camera-section {
+                grid-template-columns: 1fr;
+            }
+
+            h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Real-time Face Recognition</h1>
+
+        <div class="camera-section">
+            <div class="camera-container">
+                <h3>📹 Camera Feed</h3>
+                <video id="video" autoplay playsinline muted></video>
+                <canvas id="canvas" style="display: none;"></canvas>
+
+                <div class="controls">
+                    <button id="startBtn" onclick="startCamera()">🎥 Start Camera</button>
+                    <button id="captureBtn" onclick="captureFrame()" disabled>📸 Capture Frame</button>
+                    <button id="registerBtn" onclick="registerCurrentFace()" disabled>👤 Register Face</button>
+                </div>
+            </div>
+
+            <div class="camera-container">
+                <h3>🔍 Recognition Result</h3>
+                <div id="status" class="status">⏹️ Camera stopped</div>
+
+                <div id="result" class="result" style="display: none;">
+                    <div class="person-info">
+                        <div class="person-avatar" id="personAvatar">👤</div>
+                        <div class="person-name" id="personName">Unknown Person</div>
+                        <div class="confidence" id="confidence">Confidence: 0%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="registered-faces">
+            <h3>👥 Registered Faces</h3>
+            <div id="faceGrid" class="face-grid">
+                <!-- Registered faces will be displayed here -->
+            </div>
+        </div>
+
+        <div class="logs">
+            <h4>📋 Activity Logs</h4>
+            <div id="logs">
+                <div class="log-entry">
+                    <span class="log-time">12:00:00</span>
+                    <span class="log-info">System initialized</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let video = document.getElementById('video');
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        let stream = null;
+        let isRecognizing = false;
+        let recognitionInterval = null;
+
+        // Initialize camera
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+
+                video.srcObject = stream;
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('captureBtn').disabled = false;
+                document.getElementById('registerBtn').disabled = false;
+
+                addLog('Camera started successfully', 'success');
+                updateStatus('Camera active - Ready for recognition', 'recognizing');
+
+                // Start automatic recognition
+                startAutoRecognition();
+
+            } catch (error) {
+                addLog('Error accessing camera: ' + error.message, 'error');
+                updateStatus('Camera access failed', 'error');
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+
+            video.srcObject = null;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('captureBtn').disabled = true;
+            document.getElementById('registerBtn').disabled = true;
+
+            stopAutoRecognition();
+            updateStatus('Camera stopped', '');
+            addLog('Camera stopped', 'info');
+        }
+
+        // Automatic face recognition
+        function startAutoRecognition() {
+            if (isRecognizing) return;
+
+            isRecognizing = true;
+            recognitionInterval = setInterval(() => {
+                captureFrame();
+            }, 2000); // Recognize every 2 seconds
+
+            addLog('Auto recognition started', 'success');
+        }
+
+        function stopAutoRecognition() {
+            if (recognitionInterval) {
+                clearInterval(recognitionInterval);
+                recognitionInterval = null;
+            }
+            isRecognizing = false;
+            addLog('Auto recognition stopped', 'info');
+        }
+
+        // Capture frame and send for recognition
+        async function captureFrame() {
+            if (!stream) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+
+            // Convert canvas to blob
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('image', blob, 'frame.jpg');
+
+                try {
+                    const response = await fetch('/api/face/recognize', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const result = await response.json();
+                    displayRecognitionResult(result);
+
+                } catch (error) {
+                    addLog('Recognition failed: ' + error.message, 'error');
+                }
+            }, 'image/jpeg', 0.8);
+        }
+
+        // Display recognition result
+        function displayRecognitionResult(result) {
+            const resultDiv = document.getElementById('result');
+            const personName = document.getElementById('personName');
+            const confidence = document.getElementById('confidence');
+            const personAvatar = document.getElementById('personAvatar');
+
+            if (result.status === 'success' && result.name && result.name !== 'Unknown') {
+                resultDiv.style.display = 'block';
+                personName.textContent = result.name;
+                confidence.textContent = `Confidence: ${Math.round(result.distance * 100)}%`;
+                personAvatar.textContent = result.name.charAt(0).toUpperCase();
+                updateStatus(`Recognized: ${result.name}`, 'recognized');
+
+                addLog(`Face recognized: ${result.name} (${Math.round(result.distance * 100)}% confidence)`, 'success');
+            } else {
+                resultDiv.style.display = 'none';
+                updateStatus('No face recognized', 'recognizing');
+
+                if (result.name === 'Unknown') {
+                    addLog('Unknown face detected', 'warning');
+                }
+            }
+        }
+
+        // Update status
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+        }
+
+        // Add log entry
+        function addLog(message, type) {
+            const logsDiv = document.getElementById('logs');
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+
+            const now = new Date();
+            const time = now.getHours().toString().padStart(2, '0') + ':' +
+                        now.getMinutes().toString().padStart(2, '0') + ':' +
+                        now.getSeconds().toString().padStart(2, '0');
+
+            logEntry.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">${message}</span>`;
+            logsDiv.appendChild(logEntry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        // Register current face
+        async function registerCurrentFace() {
+            const personName = prompt('Enter name for registration:');
+            if (!personName || !personName.trim()) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('image', blob, 'registration.jpg');
+                formData.append('name', personName.trim());
+
+                try {
+                    const response = await fetch('/api/face/register', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const result = await response.json();
+
+                    if (result.status === 'success') {
+                        addLog(`Face registered: ${personName}`, 'success');
+                        loadRegisteredFaces();
+                        alert(`✅ Face registered successfully!\nName: ${personName}\nID: ${result.person_id}`);
+                    } else {
+                        addLog(`Registration failed: ${result.message}`, 'error');
+                        alert('❌ Registration failed: ' + result.message);
+                    }
+
+                } catch (error) {
+                    addLog('Registration error: ' + error.message, 'error');
+                    alert('❌ Registration error: ' + error.message);
+                }
+            }, 'image/jpeg', 0.8);
+        }
+
+        // Load registered faces
+        async function loadRegisteredFaces() {
+            try {
+                const response = await fetch('/api/face/persons');
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    displayRegisteredFaces(result.persons || []);
+                }
+            } catch (error) {
+                addLog('Failed to load registered faces', 'error');
+            }
+        }
+
+        // Display registered faces
+        function displayRegisteredFaces(persons) {
+            const faceGrid = document.getElementById('faceGrid');
+
+            if (persons.length === 0) {
+                faceGrid.innerHTML = '<p style="text-align: center; color: #666;">No registered faces</p>';
+                return;
+            }
+
+            faceGrid.innerHTML = persons.map(person => `
+                <div class="face-item">
+                    <div class="face-avatar-small">${person.name.charAt(0).toUpperCase()}</div>
+                    <div style="font-size: 12px; color: #333;">${person.name}</div>
+                    <div style="font-size: 10px; color: #666;">ID: ${person.id}</div>
+                </div>
+            `).join('');
+        }
+
+        // Initialize
+        window.addEventListener('load', () => {
+            addLog('Real-time Face Recognition initialized', 'info');
+            loadRegisteredFaces();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            stopCamera();
+            stopAutoRecognition();
+        });
+    </script>
+</body>
+</html>

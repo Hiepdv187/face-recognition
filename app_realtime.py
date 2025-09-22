@@ -346,7 +346,6 @@ def recognize_face_api():
         facial_area = reps[0].get('facial_area') if isinstance(reps[0], dict) else None
         if facial_area:
             try:
-                from PIL import Image
                 orig = Image.open(filepath).convert('RGB')
                 if isinstance(facial_area, (list, tuple)) and len(facial_area) == 4:
                     x, y, w, h = facial_area
@@ -566,7 +565,6 @@ def compare_face():
 
         # Save temp
         img_bytes = file.read()
-        from PIL import Image
         import os, uuid
         tmp_path = os.path.join(UPLOAD_FOLDER, f"tmp_compare_{uuid.uuid4().hex}.jpg")
         try:

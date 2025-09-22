@@ -602,16 +602,24 @@
                     const result = await response.json();
                     console.log('📄 Response JSON:', result);
 
-                    if (result.status === 'success') {
-                        console.log('✅ Recognition successful');
-                    } else {
-                        console.error('❌ Recognition failed:', result);
-                    }
+                        if (result.status === 'success') {
+                            console.log('✅ Recognition successful');
+                        } else {
+                            console.error('❌ Recognition failed:', result);
+                        }
 
-                    displayRecognitionResult(result);
+                        // Ensure result has normalized fields
+                        if (typeof result.distance === 'undefined') result.distance = 1.0;
+                        if (typeof result.name === 'undefined') result.name = 'Unknown';
+                        // If server provides a normalized confidence use it, otherwise compute from distance
+                        if (typeof result.confidence === 'undefined') {
+                            result.confidence = 1.0 / (1.0 + Math.max(0, result.distance));
+                        }
 
-                    // Update overlay with recognition result
-                    drawOverlayWithResult(result);
+                        displayRecognitionResult(result);
+
+                        // Update overlay with recognition result
+                        drawOverlayWithResult(result);
 
                 } catch (error) {
                     console.error('❌ Network/Parse error:', error);

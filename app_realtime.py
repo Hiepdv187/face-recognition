@@ -260,10 +260,21 @@ def recognize_face_api():
             print(f"⚠️ Failed to clean up: {filepath}")
             pass
 
+        # Ensure distance is a float and compute a normalized confidence in (0,1]
+        try:
+            distance = float(distance)
+        except Exception:
+            distance = 1.0
+
+        # Convert distance to a simple confidence score: confidence = 1 / (1 + distance)
+        # This maps lower distances (better match) to higher confidence in (0, 1].
+        confidence = 1.0 / (1.0 + max(0.0, distance))
+
         return jsonify({
             "status": "success",
             "name": name,
-            "distance": distance
+            "distance": distance,
+            "confidence": confidence
         })
 
     except Exception as e:
@@ -351,4 +362,8 @@ if __name__ == '__main__':
     print("🎥 Open http://localhost:5000/smart-camera for smart camera interface")
     print("📹 Open http://localhost:5000/realtime for real-time recognition")
 
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Run without the auto-reloader to avoid double initialization which can
+    # trigger background flushes (e.g. lz4 frame flush on process exit) and
+    # cause "I/O operation on closed file" warnings. When debugging, you can
+    # still set debug=True but keep use_reloader=False.
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)

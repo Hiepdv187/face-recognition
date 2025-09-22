@@ -4,7 +4,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # DeepFace config
 FACE_MODEL = "ArcFace"
-FACE_DETECTOR = "retinaface"
+FACE_DETECTOR = "mtcnn"  # Changed from retinaface to mtcnn
 
 # FAISS + labels
 EMBEDDINGS_DIR = os.path.join(BASE_DIR, "embeddings")

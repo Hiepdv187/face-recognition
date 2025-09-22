@@ -9,11 +9,12 @@ import base64
 import json
 from recognition import recognize_face
 from embeddings import add_embedding, load_index
-from config import SIM_THRESHOLD
+from config import SIM_THRESHOLD, UPLOAD_FOLDER as CONFIG_UPLOAD_FOLDER, TEMP_FILE_TTL_SECONDS
 from database import SessionLocal
 from models import Person
 import uuid
 import warnings
+import threading
 warnings.filterwarnings("ignore", category=UserWarning)
 import tensorflow as tf
 tf.get_logger().setLevel("ERROR")
@@ -56,11 +57,49 @@ try:
 except Exception as e:
     print('Model preload failed:', str(e))
 
+# Global lock to serialize TensorFlow / DeepFace calls. TensorFlow and some
+# DeepFace backends are not always safe to call concurrently; when multiple
+# requests invoke DeepFace.represent() at the same time the process can hit
+# internal errors ("Retval[0] has already been set"). Use a lock to ensure
+# only one thread accesses the model at a time.
+TF_LOCK = threading.Lock()
+
 app = Flask(__name__)
 CORS(app)
 
-UPLOAD_FOLDER = "dataset"
+UPLOAD_FOLDER = CONFIG_UPLOAD_FOLDER if CONFIG_UPLOAD_FOLDER else "dataset"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# Background cleaner thread: removes temporary files (temp_*, tmp_recog_crop_*, tmp_compare_*)
+# older than TEMP_FILE_TTL_SECONDS. Runs every 60 seconds.
+def temp_file_cleaner(ttl_seconds=TEMP_FILE_TTL_SECONDS, interval=60):
+    import time
+    patterns = ('temp_', 'tmp_recog_crop_', 'tmp_compare_')
+    while True:
+        try:
+            now = time.time()
+            for fname in os.listdir(UPLOAD_FOLDER):
+                for p in patterns:
+                    if fname.startswith(p):
+                        full = os.path.join(UPLOAD_FOLDER, fname)
+                        try:
+                            mtime = os.path.getmtime(full)
+                            if now - mtime > ttl_seconds:
+                                try:
+                                    os.remove(full)
+                                    print(f"🧹 Removed temp file: {full}")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                        break
+        except Exception:
+            pass
+        time.sleep(interval)
+
+# Start cleaner thread as a daemon so it doesn't block shutdown
+cleaner_thread = threading.Thread(target=temp_file_cleaner, args=(), daemon=True)
+cleaner_thread.start()
 
 # Store for real-time recognition results
 recognition_cache = {}
@@ -262,7 +301,9 @@ def register_face():
 
             # Add embedding (may raise) and return meaningful errors
             try:
-                success = add_embedding(filepath, person.id)
+                # add_embedding may compute embeddings and update FAISS; serialize to avoid TF concurrency issues
+                with TF_LOCK:
+                    success = add_embedding(filepath, person.id)
             except Exception as e:
                 import traceback
                 print(f"❌ Error adding embedding for person {person.id}: {e}")
@@ -325,7 +366,8 @@ def recognize_face_api():
         print("🤖 Starting face recognition...")
         try:
             from deepface import DeepFace
-            reps = DeepFace.represent(img_path=filepath, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
+            with TF_LOCK:
+                reps = DeepFace.represent(img_path=filepath, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
         except Exception as e:
             print('Recognition deepface error:', e)
             try:
@@ -576,7 +618,8 @@ def compare_face():
         # Compute embedding similarly to registration/recognition
         try:
             from deepface import DeepFace
-            reps = DeepFace.represent(img_path=tmp_path, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
+            with TF_LOCK:
+                reps = DeepFace.represent(img_path=tmp_path, model_name='ArcFace', detector_backend='mtcnn', enforce_detection=False)
         except Exception as e:
             os.remove(tmp_path)
             return jsonify({'status': 'error', 'message': f'DeepFace error: {str(e)}'}), 500
@@ -725,8 +768,9 @@ if __name__ == '__main__':
     print("🎥 Open http://localhost:5000/smart-camera for smart camera interface")
     print("📹 Open http://localhost:5000/realtime for real-time recognition")
 
-    # Run without the auto-reloader to avoid double initialization which can
-    # trigger background flushes (e.g. lz4 frame flush on process exit) and
-    # cause "I/O operation on closed file" warnings. When debugging, you can
-    # still set debug=True but keep use_reloader=False.
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    # Run single-threaded (threaded=False) and without the auto-reloader to
+    # avoid concurrent DeepFace/TensorFlow calls which can crash the process
+    # with low-level TensorFlow errors (e.g. "Retval[0] has already been set").
+    # For production use a WSGI server (gunicorn/uwsgi) with a single worker
+    # or an external job queue to serialize model calls.
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False, threaded=False)

@@ -49,12 +49,42 @@
             text-align: center;
         }
 
-        video, canvas {
+        /* Mirror video for user preview (visual only) so it feels natural like a selfie camera.
+           When we capture/send frames we use the real (non-mirrored) pixels so recognition
+           stays consistent with stored images. */
+        video {
             width: 100%;
             max-width: 500px;
             border-radius: 15px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transform: scaleX(-1); /* visual mirror */
         }
+
+        canvas {
+            width: 100%;
+            max-width: 500px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            display: none; /* hidden canvas used for captures */
+        }
+
+        /* Large centered guide box to help users position their face. Make it noticeably bigger. */
+        .video-wrapper { position: relative; display:inline-block; }
+        .face-box {
+            position: absolute;
+            left: 50%; top: 50%;
+            width: 85%; /* much larger box */
+            height: 85%;
+            transform: translate(-50%, -50%);
+            border: 5px dashed rgba(255,255,255,0.95);
+            border-radius: 12px;
+            pointer-events: none;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+        }
+
+        .face-box.ok { border-color: rgba(40, 167, 69, 0.95); }
+        .face-box.warn { border-color: rgba(255, 193, 7, 0.95); }
+*** End Patch
 
         .controls {
             margin: 20px 0;
@@ -272,12 +302,16 @@
     </div>
 
     <script>
-        let video = document.getElementById('video');
-        let canvas = document.getElementById('canvas');
-        let ctx = canvas.getContext('2d');
-        let stream = null;
-        let isRecognizing = false;
-        let recognitionInterval = null;
+    let video = document.getElementById('video');
+    let canvas = document.getElementById('canvas');
+    let ctx = canvas.getContext('2d');
+    let stream = null;
+    let isRecognizing = false;
+    let recognitionInterval = null;
+
+    // hidden offscreen canvas used to produce non-mirrored captures (real pixel data)
+    const captureCanvas = document.createElement('canvas');
+    const captureCtx = captureCanvas.getContext('2d');
 
         // Initialize camera
         async function startCamera() {
@@ -324,7 +358,7 @@
             }
         }
 
-        function stopCamera() {
+    function stopCamera() {
             if (stream) {
                 stream.getTracks().forEach(track => track.stop());
                 stream = null;
@@ -342,6 +376,10 @@
         }
 
         // Automatic face recognition
+        // Simple auto-capture: require N consecutive positive face-detections inside the guide box
+        const AUTO_CONFIRM_COUNT = 2; // number of consecutive positive checks required (~2-4s)
+        let consecutiveOk = 0;
+
         function startAutoRecognition() {
             if (isRecognizing) {
                 console.log('⚠️ Recognition already running');
@@ -350,13 +388,31 @@
 
             isRecognizing = true;
             recognitionInterval = setInterval(() => {
-                console.log('🔄 Recognition cycle triggered');
-                captureFrame();
-            }, 2000); // Recognize every 2 seconds
+                // Check a small frame for presence of a face
+                checkFrameForFace().then(ok => {
+                    if (ok) {
+                        consecutiveOk += 1;
+                        const fb = document.querySelector('.face-box'); if (fb) fb.classList.add('ok');
+                    } else {
+                        consecutiveOk = 0;
+                        const fb = document.querySelector('.face-box'); if (fb) fb.classList.remove('ok');
+                    }
+
+                    if (consecutiveOk >= AUTO_CONFIRM_COUNT) {
+                        console.log('Auto-confirm capture triggered');
+                        consecutiveOk = 0;
+                        // capture and process (compare/register) flow in silent mode (no prompts/UI)
+                        captureAndProcess(true).catch(e => console.warn('Auto capture error', e));
+                    }
+                }).catch(err => {
+                    console.warn('checkFrameForFace error', err);
+                });
+            }, 2000); // check every 2 seconds
 
             addLog('Auto recognition started', 'success');
             console.log('✅ Auto recognition started');
         }
+*** End Patch
 
         function stopAutoRecognition() {
             if (recognitionInterval) {
@@ -367,69 +423,120 @@
             addLog('Auto recognition stopped', 'info');
         }
 
-        // Capture frame and send for recognition
+        // Capture frame and send for recognition (deprecated in favor of captureAndProcess)
         async function captureFrame() {
-            if (!stream) {
-                console.log('⚠️ No stream available');
-                return;
-            }
+            // keep compatibility: call captureAndProcess
+            return captureAndProcess();
+        }
 
-            console.log('📸 Starting frame capture...');
+        // Capture current frame into a non-mirrored blob and process through compare/recognize/register flow
+    async function captureAndProcess(silent = false) {
+            if (!stream) return;
 
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
 
-            console.log(`🎨 Canvas size: ${canvas.width}x${canvas.height}`);
+            // video is mirrored visually, so draw video flipped horizontally on capture canvas to get non-mirrored pixels
+            captureCtx.save();
+            captureCtx.scale(-1, 1); // flip horizontally
+            captureCtx.drawImage(video, -captureCanvas.width, 0, captureCanvas.width, captureCanvas.height);
+            captureCtx.restore();
 
-            ctx.drawImage(video, 0, 0);
-            console.log('✅ Frame drawn to canvas');
+            return new Promise((resolve, reject) => {
+                captureCanvas.toBlob(async (blob) => {
+                    if (!blob) return reject(new Error('Failed to create blob'));
 
-            // Convert canvas to blob
-            canvas.toBlob(async (blob) => {
-                if (!blob) {
-                    console.error('❌ Failed to create blob from canvas');
-                    addLog('Failed to capture image', 'error');
-                    return;
-                }
+                    try {
+                        // First, ask /api/face/compare to ensure there's a face and get best match (use k=1)
+                        const form = new FormData();
+                        form.append('image', blob, 'capture.jpg');
+                        const cmpResp = await fetch('/api/face/compare?k=1', { method: 'POST', body: form });
+                        const cmpJson = await cmpResp.json();
 
-                console.log('📊 Blob created, size:', blob.size, 'bytes');
+                        if (cmpJson.status !== 'success' || !cmpJson.results || cmpJson.results.length === 0) {
+                            addLog('No face detected in capture', 'warning');
+                            if (!silent) alert('Không phát hiện khuôn mặt rõ ràng. Vui lòng căn chính diện và thử lại.');
+                            return resolve(null);
+                        }
 
-                if (blob.size < 1000) {
-                    console.warn('⚠️ Blob size too small, might be empty image');
-                    addLog('Image capture too small', 'warning');
-                }
+                        const best = cmpJson.results[0] || {};
+                        if (!best.name || best.name === 'Unknown') {
+                            if (silent) {
+                                addLog('Unknown face detected (auto - skipping registration)', 'warning');
+                            } else {
+                                // prompt for registration name
+                                const name = prompt('Chưa có trong cơ sở dữ liệu. Nhập tên để đăng ký (Hủy để bỏ qua):');
+                                if (name && name.trim()) {
+                                    const regForm = new FormData();
+                                    regForm.append('name', name.trim());
+                                    regForm.append('image', blob, 'register.jpg');
+                                    try {
+                                        const regResp = await fetch('/api/face/register', { method: 'POST', body: regForm });
+                                        const regJson = await regResp.json();
+                                        if (regJson.status === 'success') {
+                                            addLog('Registered: ' + regJson.name, 'success');
+                                            alert('Đăng ký thành công: ' + regJson.name);
+                                            loadRegisteredFaces();
+                                        } else {
+                                            addLog('Register failed: ' + (regJson.message || JSON.stringify(regJson)), 'error');
+                                            alert('Đăng ký thất bại: ' + (regJson.message || 'Unknown error'));
+                                        }
+                                    } catch (err) {
+                                        addLog('Register request failed: ' + err.message, 'error');
+                                        alert('Lỗi khi gửi yêu cầu đăng ký');
+                                    }
+                                } else {
+                                    addLog('User skipped registration', 'info');
+                                }
+                            }
+                        } else {
+                            if (silent) {
+                                addLog('Recognized (auto): ' + (best.name || 'Unknown'), 'success');
+                            } else {
+                                const accept = confirm('Nhận diện: ' + (best.name || 'Unknown') + '\nLưu kết quả?');
+                                if (accept) {
+                                    addLog('Recognition accepted: ' + best.name, 'success');
+                                    alert('Đã nhận diện: ' + best.name);
+                                } else {
+                                    addLog('Recognition dismissed by user', 'info');
+                                }
+                            }
+                        }
 
-                const formData = new FormData();
-                formData.append('image', blob, 'frame.jpg');
-
-                try {
-                    console.log('🎥 Sending frame for recognition...');
-
-                    const response = await fetch('/api/face/recognize', {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    console.log('📡 Response status:', response.status);
-                    console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
-
-                    const result = await response.json();
-                    console.log('📄 Response JSON:', result);
-
-                    if (result.status === 'success') {
-                        console.log('✅ Recognition successful');
-                    } else {
-                        console.error('❌ Recognition failed:', result);
+                        resolve(cmpJson);
+                    } catch (err) {
+                        reject(err);
                     }
+                }, 'image/jpeg', 0.9);
+            });
+        }
 
-                    displayRecognitionResult(result);
+        // Lightweight check used in auto-detection cycles. Returns true if server sees a face in the frame.
+        async function checkFrameForFace() {
+            if (!stream) return false;
+            // small preview capture to reduce bandwidth
+            captureCanvas.width = 160;
+            captureCanvas.height = Math.floor(160 * (video.videoHeight / video.videoWidth));
+            captureCtx.save();
+            captureCtx.scale(-1, 1);
+            captureCtx.drawImage(video, -captureCanvas.width, 0, captureCanvas.width, captureCanvas.height);
+            captureCtx.restore();
 
-                } catch (error) {
-                    console.error('❌ Network/Parse error:', error);
-                    addLog('Recognition failed: ' + error.message, 'error');
-                    addLog('Error details: ' + error.stack, 'error');
-                }
-            }, 'image/jpeg', 0.9);
+            return new Promise((resolve) => {
+                captureCanvas.toBlob(async (blob) => {
+                    if (!blob) return resolve(false);
+                    try {
+                        const form = new FormData();
+                        form.append('image', blob, 'mini.jpg');
+                        const resp = await fetch('/api/face/compare?k=1', { method: 'POST', body: form });
+                        const j = await resp.json();
+                        const ok = j && j.status === 'success' && Array.isArray(j.results) && j.results.length > 0;
+                        resolve(ok);
+                    } catch (e) {
+                        resolve(false);
+                    }
+                }, 'image/jpeg', 0.6);
+            });
         }
 
         // Display recognition result
@@ -485,11 +592,20 @@
             const personName = prompt('Enter name for registration:');
             if (!personName || !personName.trim()) return;
 
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0);
+            if (!stream) {
+                alert('❌ Please start camera first!');
+                return;
+            }
 
-            canvas.toBlob(async (blob) => {
+            // Capture non-mirrored image from video
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+            captureCtx.save();
+            captureCtx.scale(-1, 1);
+            captureCtx.drawImage(video, -captureCanvas.width, 0, captureCanvas.width, captureCanvas.height);
+            captureCtx.restore();
+
+            captureCanvas.toBlob(async (blob) => {
                 const formData = new FormData();
                 formData.append('image', blob, 'registration.jpg');
                 formData.append('name', personName.trim());

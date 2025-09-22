@@ -59,6 +59,7 @@
             border-radius: 20px;
             overflow: hidden;
             box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+            transform: scaleX(-1); /* mirror preview for selfie UX */
         }
 
         video {
@@ -389,7 +390,8 @@
         let overlayCtx = overlayCanvas.getContext('2d');
         let stream = null;
         let isRecognizing = false;
-        let recognitionInterval = null;
+    let recognitionInterval = null;
+    let isProcessing = false; // prevent overlapping recognition requests
         let recognitionHistory = [];
 
         // Initialize camera
@@ -430,7 +432,15 @@
                 console.log('🎥 Video element configured');
 
                 // Start automatic recognition
-                startAutoRecognition();
+                // Quick server ping to surface connectivity problems early
+                fetch('/api/face/debug').then(r => r.json()).then(j => {
+                    addLog('Server debug: ' + (j.faiss_index || 'unknown'), 'info');
+                    startAutoRecognition();
+                }).catch(err => {
+                    addLog('❌ Backend unreachable: ' + err.message, 'error');
+                    updateStatus('Backend unreachable', 'error');
+                    console.error('Backend ping failed:', err);
+                });
 
             } catch (error) {
                 console.error('❌ Camera error:', error);
@@ -472,12 +482,13 @@
             // Draw face detection box (simulated)
             const centerX = overlayCanvas.width / 2;
             const centerY = overlayCanvas.height / 2;
-            const boxSize = Math.min(overlayCanvas.width, overlayCanvas.height) * 0.4;
+            // Make the detection guide box much larger so face fills more of the frame
+            const boxSize = Math.min(overlayCanvas.width, overlayCanvas.height) * 0.85;
 
-            // Face detection area
-            overlayCtx.strokeStyle = 'rgba(30, 60, 114, 0.8)';
-            overlayCtx.lineWidth = 3;
-            overlayCtx.setLineDash([10, 5]);
+            // Face detection area (more visible)
+            overlayCtx.strokeStyle = 'rgba(30, 60, 114, 0.95)';
+            overlayCtx.lineWidth = 4;
+            overlayCtx.setLineDash([12, 6]);
             overlayCtx.strokeRect(
                 centerX - boxSize/2,
                 centerY - boxSize/2,
@@ -485,8 +496,8 @@
                 boxSize
             );
 
-            // Corner brackets
-            const bracketSize = 20;
+            // Corner brackets (scale with frame size)
+            const bracketSize = Math.max(28, Math.floor(Math.min(overlayCanvas.width, overlayCanvas.height) * 0.03));
             overlayCtx.setLineDash([]);
 
             // Top-left corner
@@ -525,7 +536,7 @@
         }
 
         // Automatic face recognition
-        function startAutoRecognition() {
+    function startAutoRecognition() {
             if (isRecognizing) {
                 console.log('⚠️ Recognition already running');
                 return;
@@ -536,8 +547,9 @@
 
             recognitionInterval = setInterval(() => {
                 console.log('🔄 Recognition cycle triggered');
-                recognizeFrame();
-            }, 1500); // Recognize every 1.5 seconds
+                if (!isProcessing) recognizeFrame(false); // auto cycle: don't show UI name
+                else console.log('⏳ Skipping cycle, processing in progress');
+            }, 3000); // Recognize every 3 seconds (reduced to lower server load)
 
             addLog('Auto recognition started', 'success');
             console.log('✅ Auto recognition started');
@@ -554,7 +566,8 @@
         }
 
         // Capture frame and send for recognition
-        async function recognizeFrame() {
+    // showUI: when false, we run a silent compare (used for auto-capture checks)
+    async function recognizeFrame(showUI = true) {
             if (!stream) {
                 console.log('⚠️ No stream available');
                 return;
@@ -566,7 +579,11 @@
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0);
+            // Draw video flipped horizontally into the canvas so the server receives non-mirrored pixels
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, -canvas.width, 0);
+            ctx.restore();
 
             console.log(`🎨 Canvas size: ${canvas.width}x${canvas.height}`);
 
@@ -574,7 +591,7 @@
             const fast = true; // toggle fast-mode here
             let sendBlobPromise;
 
-            if (fast) {
+                if (fast) {
                 // target downscale size (maintain aspect ratio)
                 const targetWidth = 320;
                 const scale = Math.min(1, targetWidth / canvas.width);
@@ -585,7 +602,7 @@
                 smallCanvas.width = smallW;
                 smallCanvas.height = smallH;
                 const sctx = smallCanvas.getContext('2d');
-                // Draw scaled image
+                // Draw scaled image (canvas already contains flipped image)
                 sctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, smallW, smallH);
                 console.log(`🔽 Downscaled to: ${smallW}x${smallH} for fast upload`);
 
@@ -614,6 +631,11 @@
                     formData.append('image', blob, 'frame.jpg');
 
                     try {
+                        if (isProcessing) {
+                            console.log('⏳ Recognition already in flight, skipping submission');
+                            return;
+                        }
+                        isProcessing = true;
                         console.log('🎥 Sending frame for recognition...');
 
                         // If fast-mode is desired, call the server with ?fast=1
@@ -644,16 +666,22 @@
                             result.confidence = 1.0 / (1.0 + Math.max(0, result.distance));
                         }
 
-                        displayRecognitionResult(result);
+                        if (showUI) {
+                            displayRecognitionResult(result);
+                            // Update overlay with recognition result
+                            drawOverlayWithResult(result);
+                        } else {
+                            // In silent mode, only update logs if unknown (optional)
+                            console.log('Silent compare result:', result.name || 'Unknown');
+                        }
 
-                        // Update overlay with recognition result
-                        drawOverlayWithResult(result);
-
-                } catch (error) {
-                    console.error('❌ Network/Parse error:', error);
-                    addLog('Recognition failed: ' + error.message, 'error');
-                    drawOverlayWithResult({ name: 'Unknown', distance: 1.0 });
-                }
+                    } catch (error) {
+                        console.error('❌ Network/Parse error:', error);
+                        addLog('Recognition failed: ' + error.message, 'error');
+                        drawOverlayWithResult({ name: 'Unknown', distance: 1.0 });
+                    } finally {
+                        isProcessing = false;
+                    }
             }, 'image/jpeg', 0.9);
         }
 
@@ -796,7 +824,11 @@
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0);
+            // flip before drawing so capture is non-mirrored
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, -canvas.width, 0);
+            ctx.restore();
 
             canvas.toBlob(async (blob) => {
                 const formData = new FormData();

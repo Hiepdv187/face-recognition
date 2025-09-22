@@ -20,3 +20,7 @@ SIM_THRESHOLD = 0.5
 
 # Upload folder
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "dataset")
+
+# Temporary file cleanup (seconds). Files older than this will be removed by
+# the background cleaner thread. Default: 15 minutes.
+TEMP_FILE_TTL_SECONDS = int(os.getenv('TEMP_FILE_TTL_SECONDS', 15 * 60))
